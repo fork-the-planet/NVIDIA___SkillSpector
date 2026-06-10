@@ -182,9 +182,7 @@ def _check_tp1(text: str, source_field: str) -> list[Finding]:
         findings.append(
             Finding(
                 rule_id="TP1",
-                message=(
-                    f"HTML comment found in '{source_field}': potential hidden instruction."
-                ),
+                message=(f"HTML comment found in '{source_field}': potential hidden instruction."),
                 severity="HIGH",
                 confidence=confidence,
                 file="SKILL.md",
@@ -353,8 +351,7 @@ def _check_tp2(text: str, source_field: str, is_identifier: bool) -> list[Findin
         if found_confusables:
             homoglyph_found = True
             examples = ", ".join(
-                f"U+{ord(c):04X} (looks like '{latin}')"
-                for c, latin in found_confusables[:3]
+                f"U+{ord(c):04X} (looks like '{latin}')" for c, latin in found_confusables[:3]
             )
             findings.append(
                 Finding(
@@ -755,7 +752,7 @@ Respond in JSON matching this exact schema:
             # Strip opening fence (```json or ```)
             first_newline = json_text.find("\n")
             if first_newline != -1:
-                json_text = json_text[first_newline + 1:]
+                json_text = json_text[first_newline + 1 :]
             # Strip closing fence
             if json_text.rstrip().endswith("```"):
                 json_text = json_text.rstrip()[:-3].rstrip()
@@ -789,9 +786,7 @@ Respond in JSON matching this exact schema:
                 file="SKILL.md",
                 category=_CATEGORY,
                 tags=list(_FRAMEWORK_TAGS),
-                explanation=explanation or (
-                    f"Declared: {declared}. Actual: {actual}."
-                ),
+                explanation=explanation or (f"Declared: {declared}. Actual: {actual}."),
                 remediation=(
                     "Update the skill description to accurately reflect all capabilities, "
                     "or remove undeclared functionality from the implementation."
@@ -835,8 +830,11 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     if isinstance(params, list):
         findings.extend(_check_tp3(params))
 
-    # TP4: LLM-based check (only when use_llm is enabled)
-    if state.get("use_llm", False):
+    # TP4: LLM-based check (only when use_llm is enabled). Defaults to True to
+    # match every other LLM-using node (semantic_*, meta_analyzer); the CLI
+    # always sets this explicitly, so the default only affects programmatic
+    # callers that omit the key.
+    if state.get("use_llm", True):
         findings.extend(_check_tp4(state))
 
     logger.info("%s: %d findings", ANALYZER_ID, len(findings))
