@@ -178,6 +178,10 @@ def _scan_skill(
 
 def main() -> None:
     """Entry point for the batch scanner CLI."""
+    # -- Windows Unicode support ---------------------------------------------
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+
     # -- Rich detection -------------------------------------------------------
     try:
         from rich.console import Console
