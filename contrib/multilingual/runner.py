@@ -89,7 +89,20 @@ LLMAnalyzerBase.parse_response = _patched_base_parse
 
 
 # -- Patch 3: LLMMetaAnalyzer.parse_response handles raw JSON ---------------
+# Also sanitizes LLM quirks: null string fields, "none" impact value.
 _original_meta_parse = LLMMetaAnalyzer.parse_response
+
+
+def _sanitize_meta_finding(d: dict) -> dict:
+    """Fix common LLM output quirks that break downstream consumers."""
+    # LLM sometimes emits null for optional string fields
+    for key in ("remediation", "explanation"):
+        if d.get(key) is None:
+            d[key] = ""
+    # LLM sometimes emits "none" which is not in the literal enum
+    if d.get("impact") not in ("critical", "high", "medium", "low"):
+        d["impact"] = "low"
+    return d
 
 
 def _patched_meta_parse(self, response, batch):
@@ -102,7 +115,7 @@ def _patched_meta_parse(self, response, batch):
         result = MetaAnalyzerResult.model_validate(data)
         items = []
         for f in result.findings:
-            d = f.model_dump()
+            d = _sanitize_meta_finding(f.model_dump())
             d["_file"] = batch.file_path
             items.append(d)
         return items
@@ -145,20 +158,24 @@ LLMAnalyzerBase.build_prompt = _patched_base_build_prompt
 # -- Patch 5: append JSON format to meta-analyzer prompt -----------------------
 _original_meta_build_prompt = LLMMetaAnalyzer.build_prompt
 
+_META_JSON_PROMPT = (
+    "\n\nRespond with ONLY a JSON object (no markdown):\n"
+    '{"findings": [{"pattern_id": "...", "is_vulnerability": true|false, '
+    '"confidence": 0.0-1.0, "intent": "malicious|negligent|benign", '
+    '"impact": "critical|high|medium|low", '
+    '"explanation": "...", "remediation": "..."}], '
+    '"overall_assessment": {"risk_level": "LOW|MEDIUM|HIGH|CRITICAL", '
+    '"summary": "..."}}\n'
+    'Rules: never use null — use "" for empty strings. '
+    'Never use "none" for impact — use "low" for negligible. '
+    'If no findings: {"findings": [], '
+    '"overall_assessment": {"risk_level": "LOW", "summary": "No issues found"}}'
+)
+
 
 def _patched_meta_build_prompt(self, batch, **kwargs):
     prompt = _original_meta_build_prompt(self, batch, **kwargs)
-    return prompt + (
-        "\n\nRespond with ONLY a JSON object (no markdown):\n"
-        '{"findings": [{"pattern_id": "...", "is_vulnerability": true|false, '
-        '"confidence": 0.0-1.0, "intent": "malicious|negligent|benign", '
-        '"impact": "critical|high|medium|low", '
-        '"explanation": "...", "remediation": "..."}], '
-        '"overall_assessment": {"risk_level": "LOW|MEDIUM|HIGH|CRITICAL", '
-        '"summary": "..."}}\n'
-        'If no findings: {"findings": [], '
-        '"overall_assessment": {"risk_level": "LOW", "summary": "No issues found"}}'
-    )
+    return prompt + _META_JSON_PROMPT
 
 
 LLMMetaAnalyzer.build_prompt = _patched_meta_build_prompt
@@ -189,6 +206,34 @@ try:
     _ChatOpenAI.__init__ = _patched_chatopenai_init
 except ImportError:
     pass
+
+
+# -- Patch 7: silence "Event loop is closed" noise from httpx cleanup ------
+# httpx.AsyncClient internally schedules connection-close tasks.  When
+# asyncio.run() tears down the event loop before those tasks finish, they
+# fail with RuntimeError("Event loop is closed") and asyncio prints the
+# full traceback to stderr.  The error is harmless — the connections are
+# already dead — so we suppress the noise without touching any other
+# exception path.
+import asyncio as _asyncio
+
+_original_asyncio_run = _asyncio.run
+
+
+def _patched_asyncio_run(main, *, debug=None, loop_factory=None):
+    def _make_quiet_loop():
+        loop = (loop_factory or _asyncio.new_event_loop)()
+        def _handler(loop, context):
+            exc = context.get("exception")
+            if isinstance(exc, RuntimeError) and "Event loop is closed" in str(exc):
+                return  # httpx cleanup after loop teardown — harmless
+            loop.default_exception_handler(context)
+        loop.set_exception_handler(_handler)
+        return loop
+    return _original_asyncio_run(main, debug=debug, loop_factory=_make_quiet_loop)
+
+
+_asyncio.run = _patched_asyncio_run
 
 
 def _strip_markdown_fences(text: str) -> str:
