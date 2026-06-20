@@ -61,6 +61,10 @@ dev = [
 [project.scripts]
 skillspector = "skillspector.cli:app"
 
+[tool.uv]
+# Enable `uv tool install git+https://github.com/NVIDIA/skillspector.git`
+# for a simpler single-command installation without cloning.
+
 [project.urls]
 Homepage = "https://github.com/NVIDIA/skillspector"
 Documentation = "https://github.com/NVIDIA/skillspector#readme"
