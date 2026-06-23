@@ -30,6 +30,15 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 
 Create and activate a virtual environment first (all `make` targets assume the venv is active). Use **uv** or **pip**; the Makefile uses `uv` if available, otherwise `pip`.
 
+**Quick install with uv (no clone required):**
+
+```bash
+uv tool install git+https://github.com/NVIDIA/skillspector.git
+# Update later: uv tool update skillspector
+```
+
+**From source:**
+
 ```bash
 # Clone the repository
 git clone https://github.com/NVIDIA/skillspector.git
