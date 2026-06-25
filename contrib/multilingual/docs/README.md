@@ -1,14 +1,21 @@
 # Multilingual Batch Scanner for SkillSpector
 
+[![Tests](https://img.shields.io/badge/tests-164%20passed-brightgreen)]()
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
+[![Upstream](https://img.shields.io/badge/upstream-NVIDIA%2FSkillSpector-ab0431f-orange)](https://github.com/NVIDIA/SkillSpector)
+[![License](https://img.shields.io/badge/license-Apache%202.0-lightgrey)]()
+
 SkillSpector is a static+LLM security analyzer for AI agent skill definitions.
 This module extends it to scan **directories** of skills in parallel, with
 automatic language detection and targeted LLM gap-fill for non-English skills.
 Zero changes to upstream `src/skillspector/`.
 
+**Contents:** [What it does](#what-it-does) · [Quickstart](#quickstart) · [All Commands](#all-commands) · [Running Tests](#running-tests) · [For PR Reviewers](#for-pr-reviewers)
+
 ## What it does
 
 ```
-python -m contrib.multilingual.batch_scan ./skills/ -f terminal --workers 7
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 7
 ```
 
 1. Finds all `SKILL.md`-containing directories under the input root
@@ -53,13 +60,13 @@ The `.env` file needs these keys (see `.env.example` for the full template):
 ### Static-only (fast, no API keys needed)
 
 ```bash
-python -m contrib.multilingual.batch_scan ./skills/ --no-llm
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --no-llm
 ```
 
 ### Full LLM scan
 
 ```bash
-python -m contrib.multilingual.batch_scan ./skills/ -f terminal --workers 7
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 7
 ```
 
 ### Test with built-in fixtures
@@ -187,10 +194,10 @@ static rules, LLM finds 2–8 additional issues per skill.
 
 ```bash
 # Upstream — scan one skill
-skillspector scan ./skills/my-skill/ -f json -o upstream.json
+skillspector scan ./tests/fixtures/malicious_skill/ -f json -o upstream.json
 
 # Batch — scan all skills
-python -m contrib.multilingual.batch_scan ./skills/ -f json -o batch.json
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f json -o batch.json
 ```
 
 Key differences in batch output:
@@ -198,6 +205,71 @@ Key differences in batch output:
 - `enhancements.gap_fill_applied` — true if LLM gap-fill was used
 - `enhancements.english_keyword_rules_skipped` — count of static rules bypassed
 - `skill.language` — detected language tag
+
+## All Commands
+
+### Scan (LLM mode)
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 7    # default
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 1    # sequential, easy to read
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 20   # high throughput
+```
+
+### Scan (static-only, no API keys)
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --no-llm
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --no-require-llm --no-llm  # skip LLM even for non-English
+```
+
+### Output formats
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal                # default (Rich)
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f json -o report.json
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f markdown -o report.md
+```
+
+### Fixture test (built-in 23 skills)
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 8
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f terminal --workers 8 --no-llm
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f json -o report.json --workers 8
+```
+
+### Language override
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --lang auto --workers 4    # detect (default)
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --lang zh -f terminal --workers 4
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --lang ja -f terminal --workers 4
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --lang ko -f terminal --workers 4
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --lang en -f terminal --workers 4   # skip gap-fill
+```
+
+### Debugging
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --workers 1 -V             # single worker + verbose
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --workers 4 -V
+skillspector scan ./tests/fixtures/malicious_skill/ --no-llm                   # verify upstream works
+```
+
+### Compare upstream vs batch
+
+```bash
+skillspector scan ./tests/fixtures/malicious_skill/ -f json -o upstream.json
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f json -o batch.json --workers 4
+```
+
+### CI
+
+```bash
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f json -o report.json --workers 8
+if [ $? -eq 0 ]; then echo "All clean"; fi
+```
 
 ## Tuning `--workers`
 
@@ -218,6 +290,23 @@ Key differences in batch output:
 --lang en      # Force English (skip gap-fill)
 ```
 
+## Debugging
+
+```bash
+# Single worker + verbose output — easiest to read
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --workers 1 -V
+
+# Verify upstream still works
+skillspector scan ./tests/fixtures/malicious_skill/ --no-llm
+```
+
+## Edge cases
+
+```bash
+# Static-only + skip LLM requirement even for non-English skills
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ --no-require-llm --no-llm
+```
+
 ## Exit codes
 
 | Code | Meaning |
@@ -229,7 +318,7 @@ Key differences in batch output:
 CI usage:
 
 ```bash
-python -m contrib.multilingual.batch_scan ./skills/ -f json -o report.json
+python -m contrib.multilingual.batch_scan ./tests/fixtures/ -f json -o report.json
 if [ $? -eq 0 ]; then
     echo "All clean"
 fi
@@ -258,3 +347,87 @@ fi
    pipeline, but the user won't know which findings were lost.
 
 See `DESIGN.md` for architecture details and `docs/archive/FUTURE_WORK.md` for suggested directions.
+
+## Running Tests
+
+```bash
+# === All 164 tests ===
+
+# Unit tests — random order (seed=42, 120 tests)
+python contrib/multilingual/tests/tests-pro/random_numbered.py
+
+# Pool wiring smoke test (4 checks)
+python contrib/multilingual/tests/test_pool_wiring.py
+
+# Monkey-patch invasiveness (14 tests)
+python contrib/multilingual/tests/test_monkeypatch_invasiveness.py
+
+# Monkey-patch fragility (26 tests)
+python contrib/multilingual/tests/test_monkeypatch_fragility.py
+
+# === Convenience ===
+
+# All review-themed tests in one command
+python -m unittest \
+  contrib.multilingual.tests.test_monkeypatch_invasiveness \
+  contrib.multilingual.tests.test_monkeypatch_fragility -v
+python contrib/multilingual/tests/test_pool_wiring.py
+
+# Mutation test — 30 injected bugs across 4 risk areas
+python contrib/multilingual/tests/tests-pro/mutation_max.py
+
+# Sequential pytest (if pytest installed)
+pytest contrib/multilingual/tests/tests-pro/ -v
+```
+
+## For PR Reviewers
+
+> Since last review: pool is now fully wired (dual-patch closes `from-import` bypass),
+> 44 new thematic tests answer Issues #1–#2 directly, and all 164 tests pass
+> against upstream NVIDIA/SkillSpector@ab0431f (130+ commits, zero patch conflicts).
+
+### What changed in production code (1 file)
+
+[`runner.py#L70-L91`](../runner.py#L70-L91) — `set_api_pool()` now patches **both**
+`llm_utils.get_chat_model` **and** `llm_analyzer_base.get_chat_model`.  Previously only
+the former was patched; `llm_analyzer_base`'s `from ... import` created a local
+reference that bypassed the pool entirely.  Graph analyzers (95% of LLM calls)
+now go through `PooledChatModel`.  `set_api_pool(None)` restores both modules.
+
+### How each review concern was addressed
+
+| Issue | Answer | Proof |
+|-------|--------|-------|
+| **#1 — Pool dead code** | `set_api_pool()` dual-patch | `test_pool_wiring.py`: 3 paths verified → PooledChatModel |
+| **#2 — Patches invasive** | Context manager + explicit `setup_deepseek_compat()` | `test_monkeypatch_invasiveness.py`: 14 tests — import isolation, thread isolation, 50-instance concurrency |
+| **#2 — Patches fragile** | `_verify_patch_targets()` guard before apply | `test_monkeypatch_fragility.py`: 26 tests — each of 7 patches individually verified, deep deps checked, atomicity proven |
+| **#3 — Risky code untested** | 120 unit tests across 4 risk areas | `tests/tests-pro/` — pool (45), gap-fill (41), patches (24), annotation (10) |
+
+Full response with before/after tables: [`REVIEW_RESPONSE.md`](REVIEW_RESPONSE.md)
+
+### Test suite at a glance (164 total)
+
+```
+tests/
+├── test_pool_wiring.py               ← Issue #1: 4 smoke checks
+├── test_monkeypatch_invasiveness.py   ← Issue #2: 14 tests (thread isolation)
+├── test_monkeypatch_fragility.py     ← Issue #2: 26 tests (guard verification)
+├── tests-pro/
+│   ├── test_api_pool.py              ← Issue #3: 45 tests (acquire/backoff)
+│   ├── test_gap_fill.py              ← Issue #3: 41 tests (JSON parsing)
+│   ├── test_runner_patches.py        ← Issue #3: 24 tests (context manager)
+│   └── test_annotation.py            ← Issue #3: 10 tests (language compat)
+└── docs/
+    ├── TEST_DESIGN.md                ← WHY each suite was designed
+    ├── TEST_GUIDE.md                 ← WHAT each file covers (run commands)
+    └── BUGS_FOUND.md                 ← 16 bugs found, 3 test bugs fixed
+```
+
+### Design context
+- [`DESIGN.md`](DESIGN.md) — architecture, concurrency model, dual-patch mechanism
+- [`archive/PITFALLS.md`](archive/PITFALLS.md) — thread safety, `from-import` pitfall, DeepSeek constraints
+- [`archive/FUTURE_WORK.md`](archive/FUTURE_WORK.md) — future direction + code conventions
+
+---
+
+**Next:** [DESIGN.md](DESIGN.md) — architecture & concurrency model · [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md) — PR #100 review response · [CONTRIBUTING.md](../CONTRIBUTING.md) — dev setup & code conventions

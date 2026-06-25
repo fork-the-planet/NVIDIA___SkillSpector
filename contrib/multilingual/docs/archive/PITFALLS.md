@@ -138,6 +138,39 @@ immediately with a clear error message naming the mismatched method.
 
 ---
 
+### `from ... import` creates local references that module-level patches miss
+
+`set_api_pool()` originally patched only `skillspector.llm_utils.get_chat_model`.
+But `llm_analyzer_base` imports it via `from skillspector.llm_utils import get_chat_model`
+at module level — creating a **local reference** in `llm_analyzer_base`'s namespace.
+Patching the source module left this local reference pointing to the original function.
+Graph analyzers (95% of LLM calls) bypassed the pool entirely.
+
+**Lesson:** When monkey-patching a function, grep for `from <module> import <function>`
+across the entire codebase.  Every such import creates an independent reference that
+must also be patched.  Dual-patch fix: assign to both `llm_utils.get_chat_model`
+and `llm_analyzer_base.get_chat_model`.
+
+---
+
+## High-Risk Areas
+
+Summary of the concurrency-heavy, failure-prone code rng1995 flagged. Full inventory
+with per-function mutation coverage was in the now-removed `RISK_TABLE.md`.
+
+| Area | Risk | Key danger | Covered by |
+|------|------|------------|------------|
+| `ApiKeyPool.acquire()` | 🔴 | `Condition.wait()` blocking, infinite loop, least-load `min()` | `TestAcquireRelease`, `TestConcurrentAcquireRelease` |
+| `ApiKeyPool.release()` | 🔴 | `notify_all()` wakes threads, backoff formula, `success=True/False` paths | `TestRateLimitBackoff`, `TestResourceLeakRecovery` |
+| `PooledChatModel._invoke_with_retry()` | 🔴 | Sync retry loop, 429 detection, key switching, max 5 retries | Integration test coverage |
+| `_apply_patches()` | 🔴 | Replaces 5 class methods + `asyncio.run` globally | `TestContextManagerApplyRestore` |
+| `_restore_patches()` | 🔴 | Nested exit logic, depth counter, restores 7 patches | `TestContextManagerNesting` |
+| `_patched_chatopenai_init` (Patch 6) | 🔴 | Pydantic alias priority — `timeout` vs `request_timeout` | `TestPatch6ChatOpenAITimeout` |
+| `GapFillAnalyzer.parse_response()` | 🔴 | 4 layers: JSON→Pydantic→confidence→rule_id filter | `TestParseResponse*` (35 tests) |
+| `_verify_patch_targets()` | 🟡 | 17 signature verifications — any failure should raise | `TestGuardPatch1*` through `TestGuardPatch7*` (17 tests) |
+
+---
+
 ## Development Workflow
 
 ### Always test with a real API key before claiming "it works"

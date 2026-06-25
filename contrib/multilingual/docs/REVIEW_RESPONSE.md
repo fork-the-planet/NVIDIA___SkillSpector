@@ -1,7 +1,8 @@
 # Response to PR #100 Review
 
-> This document tracks how each issue raised in the PR #100 review was addressed.
-> See `DESIGN.md` and `archive/FUTURE_WORK.md` for architecture details and roadmap.
+> Tracks how each issue raised in the PR #100 review was addressed.
+> **All three issues are now resolved with dedicated thematic test suites.**
+> See `DESIGN.md` for architecture and `../tests/` for all tests.
 
 ---
 
@@ -10,46 +11,76 @@
 **Review feedback:** `ApiKeyPool` was implemented but never wired into actual LLM
 call paths. The pool existed on disk but no code path used it.
 
-**Resolution:** `set_api_pool()` now replaces the global `get_chat_model` factory
-with a pooled version. Every LLM call — both graph-internal analyzers (SSD, SDI,
-SQP, meta, 20 per skill) and the gap-fill pass — draws from the shared key pool.
+**Resolution:** `set_api_pool()` patches BOTH `skillspector.llm_utils.get_chat_model`
+AND `skillspector.llm_analyzer_base.get_chat_model` with a pooled version. Every
+LLM call — graph-internal analyzers (20 per skill) and the gap-fill pass — goes
+through the shared key pool.
 
 | Before | After |
 |--------|-------|
-| Pool instantiated but unused | `set_api_pool(pool)` injects at module level |
-| gap-fill used single-key path | gap-fill + all analyzers share the pool |
-| No key failover for graph-internal calls | 429 → automatic failover for every LLM call |
+| Pool instantiated but unused | `set_api_pool(pool)` dual-patches `llm_utils` + `llm_analyzer_base` |
+| gap-fill used single-key path | gap-fill + all 20 graph analyzers share the pool |
+| No key failover for graph calls | 429 → automatic failover for every LLM call |
+| Pool summary always showed 0 rate-limits | Real 429 tracking across all paths |
 
-See: `api_pool.py` (`set_api_pool`, `PooledChatModel`), `runner.py` (pool integration)
+**Why dual-patch matters:** `llm_analyzer_base` imports `get_chat_model` via
+`from skillspector.llm_utils import get_chat_model` at module level, creating
+a local reference. Patching only `llm_utils` leaves this local reference
+untouched — graph-internal analyzers (95% of LLM calls) bypass the pool
+entirely. The fix adds a second assignment in `set_api_pool()`:
+`_llm_analyzer_base.get_chat_model = _pooled_get_chat_model`.
+
+**Verification:** `test_pool_wiring.py` verifies all three call paths:
+`llm_utils.get_chat_model` → `PooledChatModel`, `LLMAnalyzerBase._llm` →
+`PooledChatModel`, `GapFillAnalyzer.chat_model` → `PooledChatModel`.
+
+**Upstream resilience:** Merged NVIDIA/SkillSpector@ab0431f (130+ commits,
+89 files, OSS 2.3.7) — zero patch conflicts. All 7 monkey-patches intact.
+
+See: `api_pool.py` (`set_api_pool`, `PooledChatModel`), `runner.py` (dual-patch),
+`tests/test_pool_wiring.py` (3-path smoke test)
 
 ---
 
-## Issue 2 — Import-Time Monkey-Patches Were Invasive
+## Issue 2 — Import-Time Monkey-Patches Were Invasive and Fragile
 
-**Review feedback:** Seven monkey-patches fired at module import (`runner.py`),
-mutating upstream class attributes before any thread started. This was fragile
-(import order dependent) and invasive (no opt-out).
+**Review feedback:** Seven monkey-patches fired at module import, mutating
+upstream class attributes. This was fragile (import order dependent),
+invasive (no opt-out), and depended on internal details (Pydantic alias
+precedence, MRO instance-attribute injection) that could break silently
+on upstream updates.
 
-**Resolution:** Replaced import-time auto-patching with explicit `setup_deepseek_compat()`
-and a context manager that tracks nesting depth.
+**Resolution — Invasiveness:** Replaced import-time auto-patching with explicit
+`deepseek_compat()` context manager and `setup_deepseek_compat()` one-shot.
+Patches never fire at import time. 14 dedicated invasiveness tests prove:
 
-| Before | After |
-|--------|-------|
-| `import runner` → patches fire immediately | Call `setup_deepseek_compat()` explicitly |
-| No way to skip patches | Don't call it → patches never apply |
-| Class-attribute mutation (race risk) | Instance-attribute injection (thread-safe) |
-| No nesting guard | Depth counter — only outermost exit restores originals |
-| 7 separate `_patch_*` / `_restore_*` functions | Single context manager, apply-all / restore-all |
+| Property | Test file | What it proves |
+|----------|-----------|---------------|
+| Import is side-effect-free | `test_monkeypatch_invasiveness.py` | Subprocess isolation: `import runner` leaves `__init__` untouched |
+| Thread isolation | Same | Thread B outside context sees unpatched classes; 50 concurrent instances all get `response_schema=None` with zero races |
+| Instance-attribute isolation | Same | `self.response_schema = None` writes to instance `__dict__`, not class — Python MRO guarantees per-instance isolation |
+| Concurrent independent contexts | Same | Two threads in separate `deepseek_compat()` blocks — exit one, other stays patched |
+| Nesting safety | Same | Double/triple nested contexts — only outermost exit restores |
+| Exception-safe restoration | Same | Exception inside context → all 5 methods restored |
 
-Additional hardening:
-- **`_verify_patch_targets` guard** — verifies upstream signatures at context-enter
-  time. If upstream changes a patched method's signature, the guard raises
-  immediately with a clear error rather than silently breaking at runtime.
-- **`test_pool_wiring.py`** — smoke test verifying `PooledChatModel` routes
-  through every LLM call path.
+**Resolution — Fragility:** `_verify_patch_targets()` guard runs BEFORE any
+patches are applied. If upstream changes a patched method's signature,
+removes a class attribute, or breaks a deep dependency, the guard raises
+`RuntimeError` immediately with a specific message identifying which patch
+broke. 26 dedicated fragility tests prove:
 
-See: `runner.py` (`setup_deepseek_compat`, `_verify_patch_targets`),
-`CONTRIBUTING.md` (patch architecture)
+| Property | Test file | What it proves |
+|----------|-----------|---------------|
+| Guard passes current upstream | `test_monkeypatch_fragility.py` | No false positive against NVIDIA@ab0431f |
+| Each of 7 patches individually guarded | Same | Temporarily break each target → guard catches it with correct patch number in message |
+| Deep dependency detection | Same | `model_validate`, `to_finding`, `file_path`, `findings`, `new_event_loop` — all checked |
+| Keyword-only migration caught | Same | Parameter becoming `KEYWORD_ONLY` → guard raises |
+| Atomicity | Same | Guard fails → ZERO patches applied (fail-closed) |
+| Original references at import time | Same | `_original_*` captured when `runner.py` loads, not at apply-time |
+
+See: `runner.py` (`deepseek_compat`, `_verify_patch_targets`, `_check_signature`),
+`tests/test_monkeypatch_invasiveness.py` (14 tests),
+`tests/test_monkeypatch_fragility.py` (26 tests)
 
 ---
 
@@ -58,19 +89,29 @@ See: `runner.py` (`setup_deepseek_compat`, `_verify_patch_targets`),
 **Review feedback:** The four riskiest areas — pool acquire/release, 429 backoff,
 monkey-patches, and gap-fill parsing — had zero automated tests.
 
-**Resolution:** 120 unit tests across 4 modules, plus mutation testing.
+**Resolution:** 164 tests across 7 modules.
+
+### Unit tests (120 tests, 4 modules)
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| `test_api_pool.py` | 45 | acquire/release, rate-limit backoff, concurrency, edge cases, `try_acquire` |
-| `test_gap_fill.py` | 41 | `parse_response` JSON recovery, markdown fence stripping, prompt building, batch/collect |
-| `test_runner_patches.py` | 24 | `setup_deepseek_compat()`, context manager nesting, isolation, `_verify_patch_targets` |
-| `test_annotation.py` | 10 | `is_language_compatible`, `annotate_findings` edge cases |
+| `tests-pro/test_api_pool.py` | 45 | acquire/release, rate-limit backoff, concurrency, edge cases, `try_acquire` |
+| `tests-pro/test_gap_fill.py` | 41 | `parse_response` JSON recovery, markdown fence stripping, prompt building, batch/collect |
+| `tests-pro/test_runner_patches.py` | 24 | `deepseek_compat()`, context manager nesting, isolation, `_verify_patch_targets` |
+| `tests-pro/test_annotation.py` | 10 | `is_language_compatible`, `annotate_findings` edge cases |
 
-**Mutation testing:** 30 bugs injected across the 4 risk areas. Tests catch 21/30.
-The 9 misses are documented in `archive/FUTURE_WORK.md` §5.
+### Thematic review tests (40 tests + 4 smoke checks, 3 files)
 
-See: `tests/` directory
+| File | Tests | Answers reviewer concern |
+|------|-------|--------------------------|
+| `tests/test_pool_wiring.py` | 4 checks | Issue #1 — 3-path pool verification + restore |
+| `tests/test_monkeypatch_invasiveness.py` | 14 tests | Issue #2 — thread isolation, import no-side-effect, nesting |
+| `tests/test_monkeypatch_fragility.py` | 26 tests | Issue #2 — per-patch guard verification, deep dep detection, atomicity |
+
+### Mutation testing
+
+30 bugs injected across the 4 risk areas. Tests catch 21/30. The 9 misses
+are documented in `archive/FUTURE_WORK.md` §5.
 
 ---
 
@@ -80,35 +121,33 @@ See: `tests/` directory
 
 Acknowledged. Listed in `archive/FUTURE_WORK.md` as a low-priority cleanup. The
 duplication is deliberate for now — `gap_fill.py` is designed to work standalone
-without importing `runner.py` and its side effects.
+without importing `runner.py`.
 
 ### M2 — `graph.invoke` call count mismatch in docstring
 
 Fixed. Docstrings and comments updated to reflect the actual graph topology.
 
----
+### M3 — `except (json.JSONDecodeError, Exception)` is redundant
 
-## Additional Improvements Beyond Review Scope
+The broad `except Exception` in `_patched_base_parse` and `_patched_meta_parse`
+makes the preceding `except json.JSONDecodeError` unreachable. The dual-except
+pattern is retained as explicit documentation of the two failure modes
+(parse error vs. schema error), with distinct log messages for each.
+The outer `except Exception` is scoped to return `[]` (empty findings) —
+a single malformed LLM response never blocks the pipeline.
 
-### Performance
-- **7 failed optimization attempts evaluated and reverted.** Async pooling, global
-  semaphore, slot-count-based scheduling, and 4 other approaches were tested
-  and rejected. The current implementation represents the most stable
-  configuration. Details in internal record `PERFORMANCE_OPT_FAILURES.md`.
-- **99s baseline for 23-skill LLM scan** with 10 keys / 8 workers.
+### M4 — `record_retry_success()` name vs. behavior
 
-### Robustness
-- `cleanup_result` subprocess fallback for stale file descriptors.
-- `httpx.Timeout(connect=8s, read=30s)` prevents hung worker threads.
-- `asyncio.run` exception handler suppresses harmless cleanup noise.
-- Per-skill 90s timeout with skip-and-continue semantics.
+The method increments on each retry *attempt*, not on confirmed success.
+Renaming to `record_retry_attempt()` is queued as a low-priority cleanup
+in `archive/FUTURE_WORK.md`.
 
-### Documentation
-- `DESIGN.md` — architecture, concurrency model, patch rationale, rejected alternatives.
-- `CONTRIBUTING.md` — code map, design decisions, contribution guide.
-- `archive/ARCHITECTURE_DEEP_DIVE.md` — statelessness proof, three-layer parallelism, bug history.
-- `archive/FLOW_DIAGRAM.md` — visual pipeline diagrams.
-- `archive/FUTURE_WORK.md` — 12-item roadmap with status and suggested directions.
+### M5 — `rm -rf` subprocess fallback in `cleanup_result` largely unreachable
+
+Acknowledged. `shutil.rmtree(ignore_errors=True)` suppresses exceptions,
+so the subprocess fallback is rarely reached. Kept as defense-in-depth
+for macOS dangling-fd scenarios where `shutil.rmtree` can silently fail
+to remove the directory despite `ignore_errors=True`.
 
 ---
 
@@ -116,8 +155,15 @@ Fixed. Docstrings and comments updated to reflect the actual graph topology.
 
 | Issue | Status |
 |-------|--------|
-| #1 — Pool dead code | ✅ Wired into all LLM paths via `set_api_pool()` |
-| #2 — Invasive patches | ✅ Replaced with explicit `setup_deepseek_compat()` + context manager |
-| #3 — No tests | ✅ 120 unit tests + 30-mutation suite |
-| M1 — Duplicated utility | Known, deferred to cleanup |
+| #1 — Pool dead code | ✅ Dual-patch (`llm_utils` + `llm_analyzer_base`), 3-path smoke test, 130-commit upstream merge verified |
+| #2 — Invasive patches | ✅ Explicit context manager + setup function, 14 invasiveness + 26 fragility thematic tests |
+| #3 — No tests | ✅ 164 tests (120 unit + 40 thematic + 4 smoke), 30-mutation suite |
+| M1 — Duplicated utility | Known, deferred |
 | M2 — Docstring mismatch | Fixed |
+| M3 — Redundant except | Explicit (two failure modes with distinct logging) |
+| M4 — `record_retry_success` naming | Deferred |
+| M5 — Unreachable `rm -rf` fallback | Defense-in-depth, kept |
+
+---
+
+**Next:** [README.md](README.md) — user guide · [DESIGN.md](DESIGN.md) — architecture · [CONTRIBUTING.md](../CONTRIBUTING.md) — dev setup

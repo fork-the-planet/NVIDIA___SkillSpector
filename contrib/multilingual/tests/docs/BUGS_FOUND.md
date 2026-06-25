@@ -1,6 +1,6 @@
 # Production Code Bugs Found & Fixed
 
-> Covers two phases: 6/23 (API pool refactor) + 6/24-25 (test architecture)
+> Covers three phases: 6/23 (API pool refactor) + 6/24-25 (test architecture) + 6/26 (upstream merge + review hardening)
 > All discovered by tests or test-driven audits
 
 ---
@@ -32,6 +32,12 @@
 | B14 | `runner.py:_original_chatopenai_init` | **Capture timing depends on import order** — Captured when `_apply_patches()` runs. If another module pre-modifies `ChatOpenAI.__init__`, the wrong version is captured | Test environment may be incorrect | Moved to module load time (captured on `import runner.py`) | Audit discovery |
 | B15 | `test_runner_patches.py:Patch 4/5` | **Missing functional verification** — Only checks that method references are replaced, does not verify that the replacement actually appends JSON instructions | Patch 4/5 failure is undetectable | Added 2 functional tests: `assertIn("Respond with ONLY a JSON object", prompt)` | Mutation testing |
 
+### 6/26 — Discovered During Upstream Merge + Reviewer Response
+
+| # | Location | Bug | Symptom | Fix | Discovery Method |
+|---|------|-----|------|------|---------|
+| B16 | `runner.py:set_api_pool()` | **Pool bypass: graph path** — Only patched `llm_utils.get_chat_model`. `llm_analyzer_base` imports via `from ... import`, creating a local reference. Graph analyzers (95% LLM calls) called the unpatched local reference. `snapshot()['rate_limits_hit']` always 0. | Pool appears wired but graph path bypasses it entirely | Added `_llm_analyzer_base.get_chat_model = _pooled_get_chat_model`; `test_pool_wiring.py` now verifies `LLMAnalyzerBase._llm is PooledChatModel` | PR re-review after upstream merge |
+
 ---
 
 ## 🟡 Test Code Bugs (3)
@@ -48,7 +54,7 @@
 
 | Category | Count |
 |------|------|
-| Production code bugs (fixed) | 15 |
+| Production code bugs (fixed) | 16 |
 | Test code bugs (fixed) | 3 |
 | Known blind spots (accepted) | 4 (Q13, Q16, Q17, Q18) |
 | Mutation MISSED (not production bugs) | 9 |

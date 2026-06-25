@@ -4,7 +4,7 @@
 
 ```
 CLI
- │  python -m contrib.multilingual.batch_scan ./skills/ --workers 4 [--no-llm]
+ │  python -m contrib.multilingual.batch_scan ./tests/fixtures/ --workers 4 [--no-llm]
  │
  ▼
 ┌──────────────────────────────────────────────────────────────────────┐

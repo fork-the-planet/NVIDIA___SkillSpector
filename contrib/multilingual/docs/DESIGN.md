@@ -8,7 +8,7 @@
 
 ```
 CLI
- │  python -m contrib.multilingual.batch_scan ./skills/ --workers 7
+ │  python -m contrib.multilingual.batch_scan ./tests/fixtures/ --workers 7
  │
  ▼
 batch_scan.py :: main()
@@ -147,9 +147,14 @@ release(success=False) → mark rate_limited, backoff 30s × 2^n (cap 300s)
 acquire after 429      → picks different key automatically
 ```
 
-The pool is created once and passed to ``set_api_pool()``, which replaces the
-global ``get_chat_model`` factory with a pooled version.  Every ``ChatOpenAI``
-instance created thereafter draws from the same key ring.
+The pool is created once and passed to ``set_api_pool()``, which patches both
+``skillspector.llm_utils.get_chat_model`` **and**
+``skillspector.llm_analyzer_base.get_chat_model`` — the latter is necessary
+because ``llm_analyzer_base`` imports ``get_chat_model`` via ``from ... import``
+at module level, creating a local reference that a single-module patch would
+miss.  Without the dual patch, graph-internal analyzers (95% of LLM calls)
+bypass the pool entirely.  ``test_pool_wiring.py`` verifies all three call paths
+are wired: ``llm_utils``, ``LLMAnalyzerBase._llm``, and ``GapFillAnalyzer.chat_model``.
 
 ## cleanup_result resilience
 
@@ -193,16 +198,18 @@ contrib/multilingual/
 ├── api_pool.py          # ApiKeyPool + PooledChatModel + set_api_pool()
 ├── reports.py           # Terminal / JSON / Markdown
 ├── .env.example         # configuration template
+├── CONTRIBUTING.md      # dev setup, testing, code conventions
 ├── tests/
-│   ├── test_api_pool.py
-│   ├── test_gap_fill.py
 │   ├── test_pool_wiring.py
-│   └── test_runner_patches.py
+│   ├── test_monkeypatch_invasiveness.py
+│   ├── test_monkeypatch_fragility.py
+│   ├── tests-pro/       # 120 unit tests (4 modules)
+│   └── docs/            # TEST_DESIGN, TEST_GUIDE, BUGS_FOUND
 └── docs/
     ├── README.md        # user-facing guide
     ├── DESIGN.md        # this file
-    ├── CONTRIBUTING.md  # developer guide
-    └── archive/         # design history & future direction
+    ├── REVIEW_RESPONSE.md
+    └── archive/         # deep dives, history, future work
 ```
 
 ## Rejected Alternatives
@@ -306,3 +313,7 @@ The remaining 8 rules (P5, P6-P8, MP1-MP3, RA1-RA2) are flagged as
 gap-fill targets because their static detectors rely on specific English
 phrases (e.g., `r"(clear|erase|wipe|forget)\s+(your|my|the)\s+(memory|context|instructions)"`)
 that have zero recall on non-English text.
+
+---
+
+**Next:** [README.md](README.md) — user guide & all commands · [REVIEW_RESPONSE.md](REVIEW_RESPONSE.md) — PR #100 review response · [CONTRIBUTING.md](../CONTRIBUTING.md) — dev setup
