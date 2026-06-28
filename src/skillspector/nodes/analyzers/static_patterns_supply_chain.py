@@ -13,12 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Static patterns: supply chain (SC1–SC6) and trigger analysis (TR1–TR3).
+"""Static patterns: supply chain (SC1–SC7) and trigger analysis (TR1–TR3).
 
 SC1–SC3: regex-based pattern matching (original implementation).
 SC4: Known vulnerable dependencies — live OSV.dev lookup with static fallback.
 SC5: Abandoned dependencies — flags known-abandoned or archived packages.
 SC6: Typosquatting — flags package names similar to popular packages.
+SC7: Untrusted container image — flags image signature / registry-verification bypass.
 TR1–TR3: Trigger analysis — flags overly broad, shadowing, or baiting triggers.
 
 Node and analyze() in one module.
@@ -36,7 +37,7 @@ from skillspector.models import AnalyzerFinding, Finding, Location, Severity
 from skillspector.state import AnalyzerNodeResponse, SkillspectorState
 
 from . import static_runner
-from .common import get_context, get_line_number
+from .common import get_context, get_line_number, is_code_example
 from .osv_client import ECOSYSTEM_NPM, ECOSYSTEM_PYPI, VulnResult, query_batch, was_osv_reachable
 from .pattern_defaults import PatternCategory
 from .static_runner import analyzer_finding_to_finding
@@ -94,6 +95,17 @@ SC3_PATTERNS = [
     (r"\(lambda\s+_:\s*exec\s*\(", 0.9),
     (r"__import__\s*\(['\"]os['\"]\s*\)\.system", 0.85),
     (r"decode\s+(?:this|the)\s+(?:base64|hex)\s+(?:and\s+)?(?:run|execute)", 0.8),
+]
+
+# SC7: Untrusted Container Image — pulling images with signature/registry
+# verification turned off. These flags disable image trust regardless of the
+# registry, so they are a strong supply-chain signal with near-zero FP.
+# (`--tls-verify=false` is intentionally omitted: TM3's `verify=False` already
+# covers it; SC7 targets the image-specific bypasses TM3 does not see.)
+SC7_PATTERNS = [
+    (r"--disable-content-trust", 0.85),  # Docker Content Trust signature check off
+    (r"DOCKER_CONTENT_TRUST\s*=\s*0", 0.85),  # signature verification disabled via env
+    (r"--insecure-registry", 0.8),  # registry TLS verification off
 ]
 
 # ---------------------------------------------------------------------------
@@ -504,7 +516,7 @@ def _version_lt(v1: str, v2: str) -> bool:
 
 
 def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFinding]:
-    """Analyze content for supply chain patterns (SC1–SC3)."""
+    """Analyze content for supply chain patterns (SC1–SC3, SC7)."""
     findings: list[AnalyzerFinding] = []
 
     def loc(ln: int) -> Location:
@@ -573,6 +585,26 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                         matched_text=match.group(0)[:200],
                     )
                 )
+    # SC7: untrusted container image. Filtered through is_code_example() because
+    # these flags appear in SKILL.md docs and "never do this" warnings.
+    for pattern, confidence in SC7_PATTERNS:
+        for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
+            context_text = ctx(match.start())
+            if is_code_example(context_text):
+                continue
+            line_num = get_line_number(content, match.start())
+            findings.append(
+                AnalyzerFinding(
+                    rule_id="SC7",
+                    message="Untrusted Container Image",
+                    severity=Severity.HIGH,
+                    location=loc(line_num),
+                    confidence=confidence,
+                    tags=tag,
+                    context=context_text,
+                    matched_text=match.group(0)[:200],
+                )
+            )
     return findings
 
 
