@@ -164,7 +164,10 @@ class TestSarifResultProperties:
     def test_active_finding_metadata_in_properties(self) -> None:
         finding = _make_finding(
             category="network_security",
+            pattern=r"socket\.connect",
             confidence=0.77,
+            finding="network connect",
+            explanation="Outbound network path remains open",
             remediation="Sanitize network credentials",
             code_snippet="payload",
             intent="exfiltration",
@@ -174,7 +177,10 @@ class TestSarifResultProperties:
         sarif = _build_sarif([finding])
         result = sarif["runs"][0]["results"][0]
         assert result["properties"]["category"] == "network_security"
+        assert result["properties"]["pattern"] == r"socket\.connect"
         assert result["properties"]["confidence"] == 0.77
+        assert result["properties"]["finding"] == "network connect"
+        assert result["properties"]["explanation"] == "Outbound network path remains open"
         assert result["properties"]["remediation"] == "Sanitize network credentials"
         assert result["properties"]["code_snippet"] == "payload"
         assert result["properties"]["intent"] == "exfiltration"
@@ -187,7 +193,10 @@ class TestSarifResultProperties:
             rule_id="P5",
             message="Credential leak",
             category="authn_security",
+            pattern=r"api[_-]?key",
             confidence=1.0,
+            finding="credential leak",
+            explanation="Credential material is exposed in output",
             remediation="Rotate keys",
             code_snippet="secret",
             intent="exposed_secret",
@@ -199,5 +208,8 @@ class TestSarifResultProperties:
         assert result["suppressions"][0]["kind"] == "external"
         assert result["suppressions"][0]["justification"] == "false positive"
         assert result["properties"]["category"] == "authn_security"
+        assert result["properties"]["pattern"] == r"api[_-]?key"
         assert result["properties"]["confidence"] == 1.0
+        assert result["properties"]["finding"] == "credential leak"
+        assert result["properties"]["explanation"] == "Credential material is exposed in output"
         assert result["properties"]["intent"] == "exposed_secret"

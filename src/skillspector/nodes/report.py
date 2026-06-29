@@ -104,7 +104,10 @@ def _build_sarif_properties(finding: Finding) -> dict[str, object] | None:
     finding_dict = finding.to_dict()
     metadata: dict[str, object] = {
         "category": finding_dict["category"],
+        "pattern": finding_dict["pattern"],
         "confidence": finding_dict["confidence"],
+        "finding": finding_dict["finding"],
+        "explanation": finding_dict["explanation"],
         "remediation": finding_dict["remediation"],
         "code_snippet": finding_dict["code_snippet"],
         "intent": finding_dict["intent"],

@@ -509,6 +509,9 @@ class TestReportNode:
     def test_report_output_format_sarif_includes_finding_properties(self) -> None:
         finding = _finding("E2", "HIGH", "env harvest", confidence=0.85, file="tool.py")
         finding.category = "environment"
+        finding.pattern = r"os\.environ"
+        finding.finding = "TOKEN lookup"
+        finding.explanation = "Environment-derived secret access"
         finding.remediation = "Drop env var usage"
         finding.code_snippet = "os.environ['TOKEN']"
         finding.intent = "secret_exfiltration"
@@ -524,7 +527,10 @@ class TestReportNode:
         result = report(state)
         result_row = result["sarif_report"]["runs"][0]["results"][0]
         assert result_row["properties"]["category"] == "environment"
+        assert result_row["properties"]["pattern"] == r"os\.environ"
         assert result_row["properties"]["confidence"] == 0.85
+        assert result_row["properties"]["finding"] == "TOKEN lookup"
+        assert result_row["properties"]["explanation"] == "Environment-derived secret access"
         assert result_row["properties"]["remediation"] == "Drop env var usage"
         assert result_row["properties"]["code_snippet"] == "os.environ['TOKEN']"
         assert result_row["properties"]["intent"] == "secret_exfiltration"
@@ -578,6 +584,9 @@ def test_report_baseline_suppresses_finding_and_lowers_score() -> None:
     baseline = Baseline(rules=[SuppressionRule(rule_id="P5", reason="false positive")])
     suppressed_finding = _finding("P5", "CRITICAL", confidence=1.0)
     suppressed_finding.category = "critical_path"
+    suppressed_finding.pattern = r"exec\("
+    suppressed_finding.finding = "exec call"
+    suppressed_finding.explanation = "Dynamic execution remains reachable"
     suppressed_finding.remediation = "Drop suspicious logic"
     suppressed_finding.code_snippet = "exec(payload)"
     suppressed_finding.intent = "command_execution"
@@ -603,7 +612,10 @@ def test_report_baseline_suppresses_finding_and_lowers_score() -> None:
     assert suppressed_result["suppressions"][0]["kind"] == "external"
     assert suppressed_result["suppressions"][0]["justification"] == "false positive"
     assert suppressed_result["properties"]["category"] == "critical_path"
+    assert suppressed_result["properties"]["pattern"] == r"exec\("
     assert suppressed_result["properties"]["confidence"] == 1.0
+    assert suppressed_result["properties"]["finding"] == "exec call"
+    assert suppressed_result["properties"]["explanation"] == "Dynamic execution remains reachable"
     assert suppressed_result["properties"]["remediation"] == "Drop suspicious logic"
     assert suppressed_result["properties"]["code_snippet"] == "exec(payload)"
     assert suppressed_result["properties"]["intent"] == "command_execution"
