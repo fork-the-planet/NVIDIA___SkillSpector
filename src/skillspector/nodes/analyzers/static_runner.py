@@ -188,25 +188,23 @@ _EXECUTION_SIGNAL = re.compile(
 )
 
 
-def _is_documentation_context(af: AnalyzerFinding, file_type: str, path: str) -> bool:
+def _is_documentation_context(af: AnalyzerFinding, file_type: str, path: str, content: str) -> bool:
     """Return true when a governed finding is prose or a comment without execution signals."""
     if af.rule_id not in _SEMANTIC_STRING_DOC_PRONE_RULES:
         return False
     if path.replace("\\", "/").lower().endswith("skill.md"):
         return False
-    context = af.context or ""
-    if _EXECUTION_SIGNAL.search(context):
-        return False
-    if file_type in _DOC_PROSE_FILE_TYPES:
-        return True
-    matched_text = af.matched_text or ""
-    return bool(
-        matched_text
-        and any(
-            line.lstrip().startswith(("#", "//", "/*", "*")) and matched_text in line
-            for line in context.splitlines()
-        )
+    lines = content.splitlines()
+    matched_line = (
+        lines[af.location.start_line - 1]
+        if 0 < af.location.start_line <= len(lines)
+        else af.context or ""
     )
+    if file_type in _DOC_PROSE_FILE_TYPES:
+        if _EXECUTION_SIGNAL.search(matched_line):
+            return False
+        return True
+    return bool(matched_line and matched_line.lstrip().startswith(("#", "//", "/*", "*")))
 
 
 def _is_documentation_markdown(path: str) -> bool:
@@ -316,7 +314,7 @@ def run_static_patterns(
                         af.location.start_line,
                         af.confidence,
                     )
-                if _is_documentation_context(af, file_type, path):
+                if _is_documentation_context(af, file_type, path, content):
                     logger.debug(
                         "Filtered documentation-context finding: %s in %s:%d",
                         af.rule_id,
